@@ -1,4 +1,4 @@
-from filecmp import dircmp
+from os import fsync
 from pathlib import Path
 import shutil
 import filecmp
@@ -8,16 +8,15 @@ from datetime import datetime as dt
 import sched
 import time
 
-
 def makeLogger(logPath):
-    root = logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s l#[%(lineno)s] [%(levelname)-4.7s]  %(message)s %(args)s",
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s #[%(lineno)s] [%(levelname)-4.7s]  %(message)s %(args)s",
         handlers=[logging.FileHandler(
             f"{logPath}/log.log"), logging.StreamHandler()],
         encoding="utf-8"
     )
-    return logging.getLogger(root)
+    return logging.getLogger()
 
 
 # 1. Synchronization must be one-way: after the synchronization content of the replica folder
@@ -33,13 +32,11 @@ def makeLogger(logPath):
 """Folder paths"""
 
 
-# TODO SYNC: check mtime on origin and only update if the mtime is different
-
-def checkInt(value):
+def checkInt(value) -> int:
     if int(value) <= 0:
-        logging.exception("%s is invalid: positive value required" % value)
+        logging.exception(f"{value} is invalid: Should be > 0")
         raise argparse.ArgumentTypeError(
-            "%s is invalid: positive value required" % value)
+            f"{value} is invalid: positive value required")
     else:
         return int(value)
 
@@ -47,7 +44,7 @@ def validPath(path):
     p = Path(path)
     if not p.is_dir():
         raise argparse.ArgumentTypeError(
-            "%s is invalid: not a directory" % path)
+            f"{path} is invalid: not a directory")
     else:
         return p.resolve()
 
@@ -78,39 +75,30 @@ def getTime(t):
     return dt.fromtimestamp(t).isoformat(sep=' ')
 
 
-# Recursive dircmp
-
-
-def compare(dcmp):
-    for name in dcmp.left_only:
-        logging.info("File %s only found in %s" % (name, dcmp.left))
-        if Path().is_dir(name):
-
-            print("make path")
-    for sub_dcmp in dcmp.subdirs.values():
-        print(sub_dcmp)
-        sub = cmp()
-        compare(sub)
-
-
-def newTree(dir1,dir2):
+def newTree(dir1:Path,dir2:Path):
     try:
         shutil.rmtree(dir2)
+        logger.info(f"Removed tree {dir2}")
         shutil.copytree(dir1,dir2)
-    except:
-        return
-#dcmp = cmp("/Users/michiel/Desktop/Pictures", "replica")
+        logger.info(f"Copied tree {dir1}")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        raise e
 
-# compare(dcmp)
 
-# Recursive END
 
-def syncQueue(s:sched.scheduler,args):
-    #s.enter(args.interval,2,newTree,[args.origin, args.replica])
-    s.enter(args.interval, 1, sync, [args.origin, args.replica])
+def sQueue(s:sched.scheduler,args):
+    #s.enter(args.interval,1,newTree,[args.origin, args.replica])
+    s.enter(args.interval,1, sync, [args.origin, args.replica])
     s.run()
     if s.empty():
-        syncQueue(s,args)
+        logger.info("Running sync...")
+        sQueue(s,args)
+        return 
+    else:
+        return False
+        
 
 
 def cmp(dir1: Path, dir2: Path):  # THIS FUNCTION SHOULD BE CALLED IN RECURSION
@@ -118,79 +106,90 @@ def cmp(dir1: Path, dir2: Path):  # THIS FUNCTION SHOULD BE CALLED IN RECURSION
     return comp
 
 
-def shCopy(src:Path, dest:Path):
+def fCopy(src:Path, dest:Path):
     try:
-        cp = shutil.copy2(src, dest)
-        logging.info(f"{src.name} created in {cp} on")
+        shutil.copy2(src, dest,)
+        logging.info(f"{src.name} created in {dest} on")
         return dest
     except IsADirectoryError as isdir:
-        logger.info(f"Found new subdirectory: [{isdir.filename}]")
-        try:
-            #mkPath(isdir.filename)
-            cp = shutil.copytree(isdir.filename, dest)
-            logger.info(f"Copied subdirectory {src} to {cp}")
-            return dest
-        except Exception as e:
-            logger.exception(e)
-            return e.filename
-            #sync(src, e.filename)s
+        logger.info(f"Found directory: [{isdir.filename}]")
+        dCopy(src,dest)
+
+def dCopy(src:Path, dest:Path):
+    try:
+        shutil.copytree(src, dest,dirs_exist_ok=True)
+        logger.info(f"Copied subdirectory {src} to {dest}")
+        return dest
+    except FileNotFoundError as e:
+        logger.exception(e)
+        newTree(src,dest)
 
 def isSynced(dir1:Path,dir2:Path):
-    if dir1.stat().st_mtime_ns > dir2.stat().st_mtime_ns:  # Check if modified time of original folder is greater than replica
-        return False
-    elif dir1.stat().st_mtime <= dir2.stat().st_mtime_ns:
+    if dir1.stat().st_mtime_ns < dir2.stat().st_mtime_ns: # Check if modified time of original folder is greater than replica
+        return False  
+    # elif dir1.stat().st_mtime <= dir2.stat().st_mtime_ns:
+    #     logger.info("Replica folder changed!")
+    #     return True
+    else:
         return True
 
+
+
 def sync(dir1: Path, dir2: Path):
-    comp = cmp(dir1, dir2)
-    left, right = comp.left_only, comp.right_only
-    if left:
-        logger.info(f"{len(left)} file(s) found in {dir1}.")
-    for f in left:
-        src = dir1.joinpath(f)
-        dest = dir2.joinpath(f)
-        logger.info(f"Source: {src}, Dest: {dest}")
-        if src.is_dir():
-            if not dest.exists():
-                mkPath(dest)
-                sync(src,dest)
-            elif dest.is_dir():
-                if not isSynced(src,dest):
-                    logger.warning(f"Not synced: {dest}")
-                    sync(src,dest)
-        if not dest.exists():
-            shCopy(src,dest)
-        else:
-            try:
-                shCopy(src, dest)
-            except Exception as e:
-                logger.warning(f"{e}")
-                print(e.filename2)
-                raise
-    for f in right:
-        src = dir1.joinpath(f)
-        rmv = dir2.joinpath(f)
-        logger.warning(f"Removing {rmv} from {dir2}")
-        try:
-            rmv.unlink()
-        except PermissionError as e:
-            logger.error(f"{e}")
-            try:
-                rmv.rmdir()
-                logger.info(f"Deleted {rmv} from {dir2}")
-            except OSError:
-                shutil.rmtree(dir2)
-                logger.info(f"Removed {dir2}")
+        comp = cmp(dir1, dir2)
+        left, right = comp.left_only, comp.right_only
+        for f in dir1.iterdir():
+            src = dir1.joinpath(f.name)
+            dest = dir2.joinpath(f.name)
+            if src.is_dir():
+                if dest.is_dir():
+                    if not dest.exists():
+                        #dest = mkPath(dest)
+                        dCopy(src,dest)
+                    if not isSynced(dir1,dir2):
+                        sync(src,dest)
+            # else:
+            #     fCopy(src,dest)
+        if left:
+            logger.info(f"{len(left)} new file(s) found in {dir1.name}.")
+            for f in left:
+                src = dir1.joinpath(f)
+                dest = dir2.joinpath(f)
+                fCopy(src,dest)
+        if right:
+            for f in right:
+                src = dir1.joinpath(f)
+                rmv = dir2.joinpath(f)
+                logger.info(f"File {rmv.name} was removed from {dir1}")
+                try:
+                    rmv.unlink()
+                except PermissionError as e:
+                    logger.error(f"{e}")
+                    try:
+                        rmv.rmdir()
+                        logger.info(f"Deleted {rmv} from {dir2}")
+                    except OSError:
+                        shutil.rmtree(dir2)
+                        logger.info(f"Removed {dir2}")
+                    except:
+                        raise
+                except FileNotFoundError:
+                    pass
 
 
 def main(args):
     try:
         s = sched.scheduler(time.time, time.sleep)
         logger.info(f"Scheduler started at {time.ctime()}")
-        syncQueue(s,args)
-    except Exception as e:
-        print(f"Exception occured: {e}")
-        raise e
+        sQueue(s,args)
+    except RecursionError:
+        logger.info(f"Recursion limit reached. Scheduler restarted at {time.ctime()}")
+        main(args())
+    except FileNotFoundError as fn:
+        if fn.filename == 'replica':
+            mkPath(args.replica)
+            logger.warning(f"Replica folder was removed!\n Created folder ./{args.replica} \nScheduler restarted at {time.ctime()}")
+        main(args)
     return
 
 
