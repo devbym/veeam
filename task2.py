@@ -1,4 +1,3 @@
-from os import fsync
 from pathlib import Path
 import shutil
 import filecmp
@@ -17,20 +16,6 @@ def makeLogger(logPath):
         encoding="utf-8"
     )
     return logging.getLogger()
-
-
-# 1. Synchronization must be one-way: after the synchronization content of the replica folder
-# should be modified to exactly match content of the source folder;
-"""QUESTION: DOES THE CONTENT OF THE FOLDER CONTAIN ONLY FILES OR ALSO FOLDERS"""
-# 2. Synchronization should be performed periodically;
-"""INPUT = SYNC INTERVAL"""
-# 3. File creation/copying/removal operations should be logged to a file and to the console
-# output;
-
-# DONE: Folder paths, synchronization interval and log file path should be provided using the
-# command line arguments.
-"""Folder paths"""
-
 
 def checkInt(value) -> int:
     if int(value) <= 0:
@@ -127,9 +112,6 @@ def dCopy(src:Path, dest:Path):
 def isSynced(dir1:Path,dir2:Path):
     if dir1.stat().st_mtime_ns < dir2.stat().st_mtime_ns: # Check if modified time of original folder is greater than replica
         return False  
-    # elif dir1.stat().st_mtime <= dir2.stat().st_mtime_ns:
-    #     logger.info("Replica folder changed!")
-    #     return True
     else:
         return True
 
@@ -144,12 +126,9 @@ def sync(dir1: Path, dir2: Path):
             if src.is_dir():
                 if dest.is_dir():
                     if not dest.exists():
-                        #dest = mkPath(dest)
                         dCopy(src,dest)
                     if not isSynced(dir1,dir2):
                         sync(src,dest)
-            # else:
-            #     fCopy(src,dest)
         if left:
             logger.info(f"{len(left)} new file(s) found in {dir1.name}.")
             for f in left:
@@ -190,7 +169,6 @@ def main(args):
             mkPath(args.replica)
             logger.warning(f"Replica folder was removed!\n Created folder ./{args.replica} \nScheduler restarted at {time.ctime()}")
         main(args)
-    return
 
 
 if __name__ == "__main__":
@@ -198,4 +176,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logger = makeLogger(args.logPath)
     main(args)
-    #sync = main(args)
